@@ -45,12 +45,8 @@ async function getClinicData() {
     console.log("✅ Clinic data refreshed from live website");
     return text;
   } catch (err) {
-    console.warn("⚠️  Failed to fetch clinic website, using fallback:", err.message);
-    try {
-      return fs.readFileSync(path.join(__dirname, "clinicData.txt"), "utf-8");
-    } catch {
-      return "No clinic information available.";
-    }
+    console.warn("⚠️  Failed to fetch clinic website:", err.message);
+    return "No clinic information available.";
   }
 }
 
