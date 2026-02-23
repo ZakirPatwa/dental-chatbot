@@ -14,22 +14,45 @@ const __dirname = path.dirname(__filename);
 
 app.use(express.static(path.join(__dirname, "public")));
 
-// Load clinic website content
-let clinicData = "";
-try {
-  clinicData = fs.readFileSync(path.join(__dirname, "clinicData.txt"), "utf-8");
-} catch (err) {
-  console.warn("⚠️  clinicData.txt not found. Using fallback content.");
-  clinicData = "No clinic information available. Please add clinicData.txt to the project root.";
-}
-
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const MODEL = process.env.ANTHROPIC_MODEL || "claude-haiku-4-5-20251001";
 
-const SYSTEM_PROMPT = `You are a helpful assistant for a dental clinic. Answer clinic-related questions using the clinic information provided below. You may also use any personal information the user has shared during this conversation (such as their name). For clinic-related questions not covered by the information below, say: "I'm not sure based on the website."
+// ── Live website scraping with 1-hour cache ──────────────────────────────────
+const CLINIC_URL = "https://hmemon06.github.io/mps-dental-site/";
+let cache = { data: null, fetchedAt: 0 };
+const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
-CLINIC INFORMATION:
-${clinicData}`;
+function extractText(html) {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function getClinicData() {
+  const now = Date.now();
+  if (cache.data && (now - cache.fetchedAt) < CACHE_TTL_MS) {
+    return cache.data;
+  }
+  try {
+    const res = await fetch(CLINIC_URL);
+    const html = await res.text();
+    const text = extractText(html);
+    cache = { data: text, fetchedAt: now };
+    console.log("✅ Clinic data refreshed from live website");
+    return text;
+  } catch (err) {
+    console.warn("⚠️  Failed to fetch clinic website, using fallback:", err.message);
+    try {
+      return fs.readFileSync(path.join(__dirname, "clinicData.txt"), "utf-8");
+    } catch {
+      return "No clinic information available.";
+    }
+  }
+}
 
 app.get("/health", (req, res) => {
   res.json({ ok: true, model: MODEL });
@@ -63,6 +86,13 @@ app.post("/chat", async (req, res) => {
     sseWrite({ done: true });
     return res.end();
   }
+
+  // Fetch live clinic data (cached for 1 hour)
+  const clinicData = await getClinicData();
+  const SYSTEM_PROMPT = `You are a helpful assistant for a dental clinic. Answer clinic-related questions using the clinic information provided below. You may also use any personal information the user has shared during this conversation (such as their name). For clinic-related questions not covered by the information below, say: "I'm not sure based on the website."
+
+CLINIC INFORMATION:
+${clinicData}`;
 
   // Full conversation: prior history + current user message
   const messages = [...history, { role: "user", content: userMessage }];
@@ -146,6 +176,8 @@ app.post("/chat", async (req, res) => {
     res.end();
   }
 });
+
+getClinicData(); // pre-warm cache so the first user request doesn't wait
 
 app.listen(3000, () => {
   console.log(`✅ Server running at http://localhost:3000 (model: ${MODEL})`);
